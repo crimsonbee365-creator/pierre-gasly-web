@@ -1,0 +1,158 @@
+QUICK START - TESTING THE FIXES
+================================
+
+STEP 1: ENABLE DEBUG MODE
+--------------------------
+To see what's happening behind the scenes, add ?debug_db=1 to your URLs:
+
+- Products: https://yoursite.com/products.php?debug_db=1
+- Users: https://yoursite.com/users.php?debug_db=1
+
+This will log all database operations to your error log.
+
+
+STEP 2: TEST ADDING A SUB-ADMIN
+--------------------------------
+1. Go to Users page
+2. Click "Add Sub Admin"
+3. Fill in the form with a NEW email (not used before)
+4. Submit
+
+Expected Result: ✓ Success message with credentials
+If Error: Check error log for "DB DEBUG:" messages
+
+
+STEP 3: TEST ADDING A PRODUCT
+------------------------------
+1. Go to Products page
+2. Click "Add New Product"
+3. Fill in all required fields:
+   - Brand (select existing)
+   - Product Name
+   - Category
+   - Size (select existing)
+   - Price
+   - Stock Quantity
+   - Minimum Stock
+4. Submit
+
+Expected Result: ✓ Product appears in the list immediately
+If Error: Enable debug mode and check logs
+
+
+STEP 4: TEST ARCHIVING A PRODUCT
+---------------------------------
+1. Go to Products page (active view)
+2. Find a product
+3. Click "Archive" button
+
+Expected Result: 
+✓ Page refreshes
+✓ Product disappears from active list
+✓ Product count decreases
+✓ Can find product in "Archived" tab
+
+If Product Still Shows:
+- Enable debug mode
+- Click archive again
+- Check error log for UPDATE query details
+
+
+STEP 5: VERIFY DATA IN SUPABASE
+--------------------------------
+1. Go to Supabase Dashboard
+2. Check these tables:
+
+   Products table:
+   - Should have new product
+   - is_active should be boolean (true/false), not integer (1/0)
+   
+   Users table:
+   - Should have new sub-admin
+   - role should be 'sub_admin'
+
+
+TROUBLESHOOTING CHECKLIST:
+==========================
+
+Issue: "Email already exists" for new email
+→ Enable debug mode
+→ Check log for "fetchOne called"
+→ Verify email truly doesn't exist in Supabase users table
+
+Issue: Product not appearing after add
+→ Enable debug mode
+→ Check log for "Insert called"
+→ Look for "Supabase Error" messages
+→ Verify all required fields were filled
+
+Issue: Archive doesn't work
+→ Enable debug mode
+→ Check log for "Update called"
+→ Verify is_active is being set to false (boolean)
+→ Check if RLS policies are blocking the update
+
+Issue: Statistics show 0
+→ Verify data exists in tables (Supabase dashboard)
+→ Check if orders are marked as 'delivered'
+→ Check if sale_date format is correct (YYYY-MM-DD)
+
+
+READING ERROR LOGS:
+===================
+
+Look for these patterns:
+
+✓ Good:
+DB DEBUG: Query called
+DB DEBUG: Insert called
+DB DEBUG: Insert result
+DB DEBUG: Last insert ID set
+
+✗ Bad:
+Supabase Error (POST ...): HTTP 400 - {...}
+JSON decode error: ...
+
+
+COMMON FIXES:
+=============
+
+1. If RLS is blocking operations:
+   - Go to Supabase → Table → Policies
+   - Temporarily disable RLS for testing
+   - Re-enable with proper policies for production
+
+2. If boolean fields cause issues:
+   - Check column type in Supabase
+   - Should be "bool" not "integer"
+   - Migrate data if needed
+
+3. If insertions fail:
+   - Check for unique constraints
+   - Verify all NOT NULL fields are provided
+   - Check field types match
+
+
+EXPECTED BEHAVIOR AFTER FIXES:
+==============================
+
+✓ Can add sub-admins with new emails
+✓ Get "Email already exists" only for existing emails
+✓ Products appear immediately after adding
+✓ Archive removes product from active list instantly
+✓ Archived products appear in archived tab
+✓ Statistics update when data is added
+✓ All queries work with PostgreSQL/Supabase
+
+
+NEED HELP?
+==========
+
+1. Enable debug mode (?debug_db=1)
+2. Reproduce the issue
+3. Check error logs for "DB DEBUG:" lines
+4. Share the relevant log lines
+5. Check Supabase dashboard for actual data
+
+The debugging output will show exactly what's being sent to Supabase
+and what's being returned, making it easy to identify issues.

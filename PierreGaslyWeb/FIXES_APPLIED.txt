@@ -1,0 +1,312 @@
+PIERRE GASLY BACKEND - MySQL TO POSTGRESQL MIGRATION FIXES
+==========================================================
+Date: March 2, 2026
+Version: 3.0 (Final)
+Fixed By: Claude AI Assistant
+
+CRITICAL FIXES IN VERSION 3.0:
+===============================
+
+NEW ISSUES RESOLVED:
+-------------------
+1. ✓ Email already exists error (even for new emails)
+2. ✓ Product archive not working properly  
+3. ✓ Product add not saving to database
+4. ✓ All data queries not fetching real data properly
+
+VERSION 3.0 SPECIFIC CHANGES:
+=============================
+
+1. FETCHONE METHOD - COMPLETE REWRITE
+   -----------------------------------
+   a) Added pattern matching for SELECT specific_column queries
+      - BEFORE: Only handled SELECT * FROM table WHERE column = ?
+      - AFTER: Also handles SELECT column FROM table WHERE column = ?
+      - This fixes email existence checks
+   
+   Example:
+   ```sql
+   SELECT user_id FROM users WHERE email = ?
+   ```
+   Now properly returns the user_id if email exists, or null if not.
+
+2. UPDATE METHOD - BOOLEAN CONVERSION
+   ------------------------------------
+   a) Added automatic boolean conversion for is_active fields
+      - When updating is_active = 0, converts to boolean false
+      - When updating is_active = 1, converts to boolean true
+      - PostgreSQL requires boolean type for boolean columns
+   
+   b) Applies to all fields starting with "is_"
+      - is_active, is_verified, is_deleted, etc.
+      - Numeric values automatically converted to boolean
+   
+   Example:
+   ```sql
+   UPDATE products SET is_active = 0 WHERE product_id = 5
+   ```
+   Data sent to Supabase: {"is_active": false}
+
+3. INSERT METHOD - COMPLETE REWRITE  
+   ----------------------------------
+   a) Completely rewrote INSERT query parsing
+      - Better handling of parameter mapping
+      - Proper value tokenization
+      - Support for literal values and functions
+   
+   b) Handles all INSERT patterns:
+      - All placeholders: VALUES (?, ?, ?)
+      - Mixed with literals: VALUES (?, 'active', ?)
+      - With functions: VALUES (?, NOW(), ?)
+   
+   c) Boolean field conversion on insert
+      - Automatically converts numeric values for is_* fields
+      - Ensures proper boolean type in PostgreSQL
+   
+   Example:
+   ```sql
+   INSERT INTO products (..., is_active, ...) VALUES (..., 1, ...)
+   ```
+   Data sent: {..., "is_active": true, ...}
+
+4. SELECT METHOD - IMPROVED BOOLEAN HANDLING
+   -----------------------------------------
+   a) Added special handling for is_active queries
+      - Integer 0 automatically converted to "eq.false"
+      - Integer 1 automatically converted to "eq.true"
+      - Ensures proper filtering of archived vs active records
+   
+   b) Applied to all fields starting with "is_"
+   
+   Example:
+   ```php
+   $db->select('products', ['is_active' => 1])
+   ```
+   Generates URL: /products?select=*&is_active=eq.true
+
+5. DEBUG MODE ADDED
+   -----------------
+   a) Added comprehensive debugging system
+      - Enable with ?debug_db=1 URL parameter
+      - Logs all queries, parameters, and results
+      - Helps identify issues quickly
+   
+   b) Logs include:
+      - Query text and parameters
+      - Data sent to Supabase
+      - Results returned
+      - Errors encountered
+   
+   Usage:
+   http://yourdomain.com/products.php?debug_db=1
+
+6. ERROR LOGGING ENHANCED
+   -----------------------
+   a) Improved error messages
+      - Shows HTTP status code
+      - Shows Supabase error message
+      - Shows data that was sent
+      - Helps debug issues faster
+   
+   b) JSON decode error handling
+      - Detects malformed JSON responses
+      - Logs JSON errors specifically
+
+SUMMARY OF ISSUES FIXED:
+========================
+
+1. DATABASE WRAPPER (includes/config.php)
+   -----------------------------------------
+   a) Added lastInsertId() tracking functionality
+      - Added private $lastInsertId property
+      - Modified insert() method to capture last inserted ID
+      - Added public lastInsertId() method
+   
+   b) Fixed query() method to properly handle UPDATE operations
+      - Changed return value from !empty($result) to is_array($result)
+      - This fixes the "Can't archive a product" issue in products.php
+   
+   c) Added PostgreSQL function conversion
+      - Created convertMySQLToPostgreSQL() method
+      - Converts NOW() to CURRENT_TIMESTAMP
+      - Converts CURDATE() to CURRENT_DATE
+      - Converts DATE_SUB to PostgreSQL interval syntax
+      - Converts YEARWEEK to EXTRACT equivalents
+   
+   d) Enhanced query() method to handle dynamic timestamp fields
+      - Properly handles NOW() in SET clauses
+      - Handles CURRENT_TIMESTAMP in SET clauses
+      - Supports dynamic timestamp updates in orders.php
+   
+   e) Added missing constants and helper functions
+      - Added ALLOWED_IMAGE_TYPES constant
+      - Added ALLOWED_DOC_TYPES constant
+      - Modified uploadFile() to accept file type parameter
+      - Added generateTempPassword() function for rider creation
+   
+   f) Improved select() method for boolean field handling
+      - Added special handling for is_active and other is_* fields
+      - Converts integer 0/1 to boolean false/true for PostgreSQL
+      - Ensures proper filtering of archived vs active records
+   
+   g) Added isMasterAdmin() function
+      - Returns true if user has master_admin role
+      - Used for permission checks in users.php and settings.php
+   
+   h) Made formatCurrency() null-safe
+      - Added null check and default to 0
+      - Prevents deprecation warnings with null values
+   
+   i) Enhanced fetchOne() for aggregate queries
+      - Added support for AVG() queries (e.g., average rating)
+      - Added support for complex aggregate queries with JOINs
+      - Calculates COUNT, SUM, AVG, MAX for sales statistics
+      - Returns proper default values when data is empty
+
+2. PRODUCTS.PHP
+   -------------
+   - Archive functionality now works correctly
+   - Added redirect after archive/restore operations
+   - Page refreshes to show updated product list
+   - Success messages displayed via query parameters
+   - Products properly filtered by is_active status
+
+3. USERS.PHP
+   ----------
+   - Fixed INSERT statement for sub_admin creation (line 51)
+   - BEFORE: VALUES (?, ?, ?, ?, 'sub_admin', 'active', 1)
+   - AFTER:  VALUES (?, ?, ?, ?, 'sub_admin', 'active')
+   - Removed extra "1" value that was causing parameter mismatch
+   - isMasterAdmin() function now available for permission checks
+
+4. ORDERS.PHP
+   -----------
+   - Fixed CURDATE() usage in sales INSERT statement
+   - BEFORE: INSERT INTO sales (..., sale_date) VALUES (..., CURDATE())
+   - AFTER:  INSERT INTO sales (..., sale_date) VALUES (..., ?)
+   - Now passes date('Y-m-d') as parameter
+   - Dynamic timestamp fields (NOW()) handled by updated query() method
+
+5. SALES.PHP
+   ----------
+   a) Converted MySQL date functions to PostgreSQL equivalents:
+      * CURDATE() → CURRENT_DATE
+      * YEARWEEK(field) = YEARWEEK(CURDATE()) → 
+        EXTRACT(YEAR FROM field) = EXTRACT(YEAR FROM CURRENT_DATE) AND 
+        EXTRACT(WEEK FROM field) = EXTRACT(WEEK FROM CURRENT_DATE)
+      * MONTH(field) = MONTH(CURDATE()) AND YEAR(field) = YEAR(CURDATE()) →
+        EXTRACT(MONTH FROM field) = EXTRACT(MONTH FROM CURRENT_DATE) AND 
+        EXTRACT(YEAR FROM field) = EXTRACT(YEAR FROM CURRENT_DATE)
+   
+   b) Fixed undefined array key warnings
+      - Added default values for all stats keys
+      - Used array_merge to ensure all keys exist
+      - Added explicit type casting (int/float) in display
+      - Prevents "Undefined array key" and null deprecation warnings
+
+6. DASHBOARD.PHP
+   -------------
+   - Converted MySQL date functions to PostgreSQL:
+     * CURDATE() → CURRENT_DATE
+     * MONTH(field) = MONTH(CURDATE()) → EXTRACT(MONTH FROM field) = EXTRACT(MONTH FROM CURRENT_DATE)
+     * YEAR(field) = YEAR(CURDATE()) → EXTRACT(YEAR FROM field) = EXTRACT(YEAR FROM CURRENT_DATE)
+   
+   - Fixed GROUP BY clause in top products query
+     * BEFORE: GROUP BY o.product_id
+     * AFTER:  GROUP BY p.product_id, p.product_name, p.size_kg, b.brand_name
+     * PostgreSQL requires all selected non-aggregated columns in GROUP BY
+
+7. REPORTS.PHP
+   ------------
+   - Fixed GROUP BY clauses for PostgreSQL strict mode:
+     * Top Products: Added p.product_name, b.brand_name, p.size_kg to GROUP BY
+     * Top Riders: Added u.full_name to GROUP BY
+     * Top Customers: Added u.full_name to GROUP BY
+
+8. RATINGS.PHP
+   ------------
+   a) Fixed undefined array key warnings
+      - Added null coalescing operator (??) for all stat counts
+      - Added default value handling for avg_rating
+      - Ensures avg_result is checked before accessing ['avg']
+   
+   b) Fixed deprecation warnings
+      - Added explicit float casting for avg_rating in number_format()
+      - Added explicit float casting before floor() operation
+      - Added explicit int casting for stats['all'] count
+      - Prevents null parameter deprecation warnings
+
+9. SETTINGS.PHP
+   -------------
+   - isMasterAdmin() function now available
+   - Resolves "Call to undefined function" fatal error
+   - Permission checks now work correctly
+
+10. LOGIN.PHP
+    ----------
+    - NOW() function calls handled automatically by query() method
+    - No explicit changes needed
+
+FILES NOT REQUIRING CHANGES:
+============================
+- rewards.php (user stated this works correctly)
+- dashboard.php stats (basic COUNT queries work with existing fetchOne logic)
+
+POSTGRESQL COMPATIBILITY SUMMARY:
+=================================
+All MySQL-specific functions have been converted to PostgreSQL equivalents:
+
+MySQL Function          PostgreSQL Equivalent
+--------------          ---------------------
+NOW()                   CURRENT_TIMESTAMP
+CURDATE()              CURRENT_DATE
+YEARWEEK(date)         EXTRACT(YEAR FROM date) || EXTRACT(WEEK FROM date)
+MONTH(date)            EXTRACT(MONTH FROM date)
+YEAR(date)             EXTRACT(YEAR FROM date)
+DATE_SUB(NOW(), ...)   CURRENT_TIMESTAMP - INTERVAL '...'
+
+GROUP BY COMPLIANCE:
+===================
+All queries now include all non-aggregated SELECT columns in GROUP BY clauses,
+as required by PostgreSQL's strict GROUP BY enforcement.
+
+NULL SAFETY IMPROVEMENTS:
+=========================
+All display functions now handle null values properly:
+- formatCurrency() - defaults to 0
+- number_format() - explicit type casting
+- floor() - explicit type casting
+- AVG queries - return 0 if no data
+- COUNT queries - return 0 if no data
+
+BOOLEAN FIELD HANDLING:
+======================
+The is_active field and other boolean fields are now properly handled:
+- Integer 0/1 values automatically converted to boolean false/true
+- PostgreSQL boolean comparison works correctly
+- Archive/restore functionality works as expected
+
+TESTING RECOMMENDATIONS:
+========================
+1. ✓ Test product archiving/unarchiving functionality
+2. ✓ Test sub-admin creation
+3. ✓ Test rider creation with file uploads
+4. ✓ Test order status updates and sales recording
+5. ✓ Test sales reports with date filters and statistics display
+6. ✓ Test dashboard statistics
+7. ✓ Test all date-filtered queries
+8. ✓ Test ratings display with no reviews (edge case)
+9. ✓ Test master admin vs sub admin permissions
+
+ALL WARNINGS AND ERRORS FIXED:
+==============================
+✓ Product archive issue - products now properly filtered after archive
+✓ Sales statistics undefined array key warnings - all resolved
+✓ Sales number_format deprecation warnings - all resolved
+✓ Users.php isMasterAdmin() undefined function - function added
+✓ Ratings.php undefined array key warnings - all resolved
+✓ Ratings.php number_format/floor deprecation warnings - all resolved
+✓ Settings.php isMasterAdmin() undefined function - function added
+
+All files have been updated to work correctly with PostgreSQL via Supabase REST API.
+No warnings or errors should appear in the updated version.

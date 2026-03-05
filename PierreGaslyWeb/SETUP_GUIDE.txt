@@ -1,0 +1,30 @@
+=== PIERRE GASLY - RAILWAY DEPLOYMENT GUIDE ===
+
+RAILPACK DETECTION:
+- index.php at root ✅
+- composer.json at root ✅ (specifies PHP 8.2, pdo_mysql, mbstring)
+- Caddyfile at root ✅ (configures FrankenPHP server)
+
+RAILWAY ENVIRONMENT VARIABLES TO SET:
+Go to Railway → your service → Variables tab → add these:
+
+DB_HOST     = (from Railway MySQL → MYSQLHOST)
+DB_PORT     = (from Railway MySQL → MYSQLPORT)
+DB_NAME     = (from Railway MySQL → MYSQL_DATABASE)
+DB_USER     = (from Railway MySQL → MYSQLUSER)
+DB_PASS     = (from Railway MySQL → MYSQLPASSWORD)
+JWT_SECRET  = PierreGasly_JWT_S3cr3t_2025!
+APP_URL     = https://your-app.up.railway.app/
+
+OPTIONAL RAILWAY VARIABLE:
+RAILPACK_PHP_EXTENSIONS = pdo_mysql,mbstring,json,openssl
+
+AFTER DEPLOYMENT:
+1. Get your Railway URL
+2. Update RetrofitClient.kt BASE_URL to point to:
+   https://your-app.up.railway.app/api/
+3. Rebuild the Android app
+
+LOCAL XAMPP (fallback if env vars not set):
+- DB: localhost / root / (empty) / pierre_gasly
+- URL: http://localhost/pierre-gasly-admin/

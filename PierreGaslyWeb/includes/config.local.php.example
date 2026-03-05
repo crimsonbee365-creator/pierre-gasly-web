@@ -1,0 +1,5 @@
+<?php
+// Local dev ONLY. Do not commit.
+// define('SUPABASE_URL', 'https://YOURPROJECT.supabase.co');
+// define('SUPABASE_ANON_KEY', '...');
+// define('SUPABASE_SERVICE_KEY', '...');
