@@ -13,6 +13,75 @@ $db = Database::getInstance();
 $success = '';
 $error = '';
 
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download_backup'])) {
+    if (!isMasterAdmin()) {
+        $error = 'Only master admins can download database backups.';
+    } elseif (!verifyCSRFToken($_POST['csrf_token'] ?? '')) {
+        $error = 'Invalid security token';
+    } else {
+        $format = ($_POST['backup_format'] ?? 'csv') === 'json' ? 'json' : 'csv';
+        $tables = ['users', 'products', 'orders', 'sales', 'activity_logs', 'user_rewards', 'system_settings', 'ratings'];
+        $snapshot = [
+            'generated_at' => date('c'),
+            'generated_by' => $_SESSION['full_name'] ?? ($_SESSION['email'] ?? 'admin'),
+            'tables' => []
+        ];
+
+        foreach ($tables as $table) {
+            $snapshot['tables'][$table] = $db->select($table);
+        }
+
+        $filenameStamp = date('Y-m-d_H-i');
+        if ($format === 'json') {
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Disposition: attachment; filename="backup_' . $filenameStamp . '.json"');
+            echo json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+            logActivity('backup', 'database', 'Downloaded JSON database backup');
+            exit;
+        }
+
+        $rows = [];
+        foreach ($snapshot['tables'] as $table => $records) {
+            if (empty($records)) {
+                $rows[] = [
+                    'table' => $table,
+                    'exported_at' => $snapshot['generated_at'],
+                    'record_index' => '',
+                    'field' => '',
+                    'value' => ''
+                ];
+                continue;
+            }
+
+            foreach ($records as $index => $record) {
+                foreach ($record as $field => $value) {
+                    $rows[] = [
+                        'table' => $table,
+                        'exported_at' => $snapshot['generated_at'],
+                        'record_index' => $index + 1,
+                        'field' => $field,
+                        'value' => is_scalar($value) || $value === null ? (string)$value : json_encode($value)
+                    ];
+                }
+            }
+        }
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="backup_' . $filenameStamp . '.csv"');
+
+        $output = fopen('php://output', 'w');
+        fputcsv($output, ['table', 'exported_at', 'record_index', 'field', 'value']);
+        foreach ($rows as $row) {
+            fputcsv($output, $row);
+        }
+        fclose($output);
+
+        logActivity('backup', 'database', 'Downloaded CSV database backup');
+        exit;
+    }
+}
+
 // Handle Settings Update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_settings'])) {
     if (!verifyCSRFToken($_POST['csrf_token'])) {
@@ -450,6 +519,27 @@ include 'includes/header.php';
             </div>
 
             
+
+
+            <?php if (isMasterAdmin()): ?>
+            <div class="settings-card" style="margin-bottom: 25px;">
+                <div class="settings-card-header">
+                    <h3>🗄️ Database Management</h3>
+                </div>
+                <div class="settings-card-body">
+                    <div class="database-actions">
+                        <h4>⚠️ Master Admin Only</h4>
+                        <p style="margin:0 0 14px;color:#e65100;font-size:14px;">These actions affect your entire database. Use with caution.</p>
+                        <form method="POST" action="" class="database-actions-grid">
+                            <input type="hidden" name="csrf_token" value="<?php echo $csrfToken; ?>">
+                            <input type="hidden" name="download_backup" value="1">
+                            <button type="submit" name="backup_format" value="csv" class="db-action-btn">💾 Download Backup (CSV)</button>
+                            <button type="submit" name="backup_format" value="json" class="db-action-btn">📦 Download Backup (JSON)</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
 
             <!-- Activity Logs -->
             <div class="settings-card">
