@@ -38,44 +38,115 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_response'])) {
 // Get filter
 $rating_filter = $_GET['rating'] ?? 'all';
 
-// Build query
-$where = "WHERE 1=1";
-$params = [];
+// Load raw data from Supabase REST wrapper instead of complex SQL joins.
+// The Database helper supports simple table reads reliably, but this page
+// previously used custom JOIN queries and COUNT filters that were not being
+// resolved correctly in the current wrapper.
+$allReviews = $db->select('reviews') ?: [];
+$allUsers = $db->select('users') ?: [];
+$allOrders = $db->select('orders') ?: [];
+$allProducts = $db->select('products') ?: [];
+$allBrands = $db->select('brands') ?: [];
+$allResponses = $db->select('review_responses') ?: [];
 
-if ($rating_filter !== 'all') {
-    $where .= " AND r.rating = ?";
-    $params[] = (int)$rating_filter;
+// Build quick lookup maps
+$userMap = [];
+foreach ($allUsers as $user) {
+    if (isset($user['user_id'])) {
+        $userMap[(int)$user['user_id']] = $user;
+    }
 }
 
-// Get reviews with customer info and responses
-$sql = "SELECT r.*, 
-        u.full_name as customer_name,
-        o.order_number,
-        p.product_name,
-        b.brand_name,
-        (SELECT COUNT(*) FROM review_responses WHERE review_id = r.review_id) as response_count
-        FROM reviews r
-        JOIN users u ON r.customer_id = u.user_id
-        JOIN orders o ON r.order_id = o.order_id
-        JOIN products p ON o.product_id = p.product_id
-        JOIN brands b ON p.brand_id = b.brand_id
-        $where
-        ORDER BY r.created_at DESC";
+$orderMap = [];
+foreach ($allOrders as $order) {
+    if (isset($order['order_id'])) {
+        $orderMap[(int)$order['order_id']] = $order;
+    }
+}
 
-$reviews = $db->fetchAll($sql, $params);
+$productMap = [];
+foreach ($allProducts as $product) {
+    if (isset($product['product_id'])) {
+        $productMap[(int)$product['product_id']] = $product;
+    }
+}
 
-// Get rating statistics
+$brandMap = [];
+foreach ($allBrands as $brand) {
+    if (isset($brand['brand_id'])) {
+        $brandMap[(int)$brand['brand_id']] = $brand;
+    }
+}
+
+$responseMap = [];
+foreach ($allResponses as $response) {
+    $reviewId = (int)($response['review_id'] ?? 0);
+    if ($reviewId <= 0) {
+        continue;
+    }
+
+    $admin = $userMap[(int)($response['admin_id'] ?? 0)] ?? null;
+    $response['full_name'] = $admin['full_name'] ?? 'PGas Admin';
+    $responseMap[$reviewId][] = $response;
+}
+
+foreach ($responseMap as &$responseList) {
+    usort($responseList, function ($a, $b) {
+        return strtotime($a['created_at'] ?? '0') <=> strtotime($b['created_at'] ?? '0');
+    });
+}
+unset($responseList);
+
+// Build stats correctly per rating
 $stats = [
-    'all' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews")['count'] ?? 0,
-    '5' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews WHERE rating = 5")['count'] ?? 0,
-    '4' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews WHERE rating = 4")['count'] ?? 0,
-    '3' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews WHERE rating = 3")['count'] ?? 0,
-    '2' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews WHERE rating = 2")['count'] ?? 0,
-    '1' => $db->fetchOne("SELECT COUNT(*) as count FROM reviews WHERE rating = 1")['count'] ?? 0,
+    'all' => count($allReviews),
+    '5' => 0,
+    '4' => 0,
+    '3' => 0,
+    '2' => 0,
+    '1' => 0,
 ];
 
-$avg_result = $db->fetchOne("SELECT COALESCE(AVG(rating), 0) as avg FROM reviews");
-$avg_rating = $avg_result['avg'] ?? 0;
+$totalRatingValue = 0;
+$totalRatingCount = 0;
+foreach ($allReviews as $reviewRow) {
+    $ratingValue = (int)($reviewRow['rating'] ?? 0);
+    if ($ratingValue >= 1 && $ratingValue <= 5) {
+        $stats[(string)$ratingValue]++;
+        $totalRatingValue += $ratingValue;
+        $totalRatingCount++;
+    }
+}
+
+$avg_rating = $totalRatingCount > 0 ? ($totalRatingValue / $totalRatingCount) : 0;
+
+// Build display rows with joined details
+$reviews = [];
+foreach ($allReviews as $review) {
+    $ratingValue = (int)($review['rating'] ?? 0);
+    if ($rating_filter !== 'all' && $ratingValue !== (int)$rating_filter) {
+        continue;
+    }
+
+    $customer = $userMap[(int)($review['customer_id'] ?? 0)] ?? [];
+    $order = $orderMap[(int)($review['order_id'] ?? 0)] ?? [];
+    $product = $productMap[(int)($order['product_id'] ?? 0)] ?? [];
+    $brand = $brandMap[(int)($product['brand_id'] ?? 0)] ?? [];
+    $reviewId = (int)($review['review_id'] ?? 0);
+
+    $review['customer_name'] = $customer['full_name'] ?? 'Unknown Customer';
+    $review['order_number'] = $order['order_number'] ?? ('ORD-' . str_pad((string)($review['order_id'] ?? 0), 6, '0', STR_PAD_LEFT));
+    $review['product_name'] = $product['product_name'] ?? 'Deleted Product';
+    $review['brand_name'] = $brand['brand_name'] ?? 'Unknown Brand';
+    $review['response_count'] = count($responseMap[$reviewId] ?? []);
+    $review['_responses'] = $responseMap[$reviewId] ?? [];
+
+    $reviews[] = $review;
+}
+
+usort($reviews, function ($a, $b) {
+    return strtotime($b['created_at'] ?? '0') <=> strtotime($a['created_at'] ?? '0');
+});
 
 $csrfToken = generateCSRFToken();
 include 'includes/header.php';
@@ -534,17 +605,7 @@ include 'includes/header.php';
     </div>
 <?php else: ?>
     <?php foreach ($reviews as $review): ?>
-        <?php
-        // Get responses for this review
-        $responses = $db->fetchAll(
-            "SELECT rr.*, u.full_name 
-             FROM review_responses rr
-             JOIN users u ON rr.admin_id = u.user_id
-             WHERE rr.review_id = ?
-             ORDER BY rr.created_at ASC",
-            [$review['review_id']]
-        );
-        ?>
+        <?php $responses = $review['_responses'] ?? []; ?>
         <div class="review-card">
             <div class="review-header">
                 <div class="review-customer-info">
