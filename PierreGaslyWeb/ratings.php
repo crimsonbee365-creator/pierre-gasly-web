@@ -1,7 +1,7 @@
 <?php
 /**
  * PIERRE GASLY - Customer Ratings & Reviews
- * View customer feedback and respond as PGas Admin
+ * View customer feedback for PGas Admin
  */
 
 require_once 'includes/config.php';
@@ -13,27 +13,42 @@ $db = Database::getInstance();
 $success = '';
 $error = '';
 
-// Handle Admin Response
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_response'])) {
-    if (!verifyCSRFToken($_POST['csrf_token'])) {
-        $error = 'Invalid security token';
-    } else {
-        $review_id = (int)$_POST['review_id'];
-        $response_text = sanitize($_POST['response_text']);
-        
-        if (empty($response_text)) {
-            $error = 'Response cannot be empty';
+function pgasParseUtcToManila($datetime) {
+    if ($datetime === null || $datetime === '') {
+        return null;
+    }
+
+    try {
+        $manilaTimezone = new DateTimeZone('Asia/Manila');
+        $raw = trim((string)$datetime);
+
+        if (preg_match('/(Z|[+\-]\d{2}:?\d{2})$/', $raw)) {
+            $dateTime = new DateTimeImmutable($raw);
         } else {
-            $sql = "INSERT INTO review_responses (review_id, admin_id, response_text) VALUES (?, ?, ?)";
-            if ($db->query($sql, [$review_id, $_SESSION['user_id'], $response_text])) {
-                $success = 'Response posted successfully!';
-                logActivity('create', 'review_response', $review_id, "Responded to customer review");
-            } else {
-                $error = 'Failed to post response';
-            }
+            $dateTime = new DateTimeImmutable($raw, new DateTimeZone('UTC'));
         }
+
+        return $dateTime->setTimezone($manilaTimezone);
+    } catch (Throwable $e) {
+        return null;
     }
 }
+
+function pgasUtcToManilaTimestamp($datetime) {
+    $dateTime = pgasParseUtcToManila($datetime);
+    return $dateTime ? $dateTime->getTimestamp() : 0;
+}
+
+function pgasFormatUtcToManila($datetime, $format = 'M d, Y g:i A') {
+    $dateTime = pgasParseUtcToManila($datetime);
+    if ($dateTime) {
+        return $dateTime->format($format);
+    }
+
+    return formatDateTime($datetime, $format);
+}
+
+// Admin response UI intentionally removed.
 
 // Get filter
 $rating_filter = $_GET['rating'] ?? 'all';
@@ -47,7 +62,6 @@ $allUsers = $db->select('users') ?: [];
 $allOrders = $db->select('orders') ?: [];
 $allProducts = $db->select('products') ?: [];
 $allBrands = $db->select('brands') ?: [];
-$allResponses = $db->select('review_responses') ?: [];
 
 // Build quick lookup maps
 $userMap = [];
@@ -78,50 +92,6 @@ foreach ($allBrands as $brand) {
     }
 }
 
-$responseMap = [];
-foreach ($allResponses as $response) {
-    $reviewId = (int)($response['review_id'] ?? 0);
-    if ($reviewId <= 0) {
-        continue;
-    }
-
-    $admin = $userMap[(int)($response['admin_id'] ?? 0)] ?? null;
-    $response['full_name'] = $admin['full_name'] ?? 'PGas Admin';
-    $responseMap[$reviewId][] = $response;
-}
-
-foreach ($responseMap as &$responseList) {
-    usort($responseList, function ($a, $b) {
-        return strtotime($a['created_at'] ?? '0') <=> strtotime($b['created_at'] ?? '0');
-    });
-}
-unset($responseList);
-
-// Build stats correctly per rating
-$stats = [
-    'all' => count($allReviews),
-    '5' => 0,
-    '4' => 0,
-    '3' => 0,
-    '2' => 0,
-    '1' => 0,
-];
-
-$totalRatingValue = 0;
-$totalRatingCount = 0;
-foreach ($allReviews as $reviewRow) {
-    $ratingValue = (int)($reviewRow['rating'] ?? 0);
-    if ($ratingValue >= 1 && $ratingValue <= 5) {
-        $stats[(string)$ratingValue]++;
-        $totalRatingValue += $ratingValue;
-        $totalRatingCount++;
-    }
-}
-
-$avg_rating = $totalRatingCount > 0 ? ($totalRatingValue / $totalRatingCount) : 0;
-
-// Build display rows with joined details
-$reviews = [];
 foreach ($allReviews as $review) {
     $ratingValue = (int)($review['rating'] ?? 0);
     if ($rating_filter !== 'all' && $ratingValue !== (int)$rating_filter) {
@@ -138,14 +108,12 @@ foreach ($allReviews as $review) {
     $review['order_number'] = $order['order_number'] ?? ('ORD-' . str_pad((string)($review['order_id'] ?? 0), 6, '0', STR_PAD_LEFT));
     $review['product_name'] = $product['product_name'] ?? 'Deleted Product';
     $review['brand_name'] = $brand['brand_name'] ?? 'Unknown Brand';
-    $review['response_count'] = count($responseMap[$reviewId] ?? []);
-    $review['_responses'] = $responseMap[$reviewId] ?? [];
 
     $reviews[] = $review;
 }
 
 usort($reviews, function ($a, $b) {
-    return strtotime($b['created_at'] ?? '0') <=> strtotime($a['created_at'] ?? '0');
+    return pgasUtcToManilaTimestamp($b['created_at'] ?? null) <=> pgasUtcToManilaTimestamp($a['created_at'] ?? null);
 });
 
 $csrfToken = generateCSRFToken();
@@ -373,129 +341,22 @@ include 'includes/header.php';
 }
 
 /* Response Section */
-.review-responses {
-    border-top: 2px solid #f0f0f0;
-    padding-top: 20px;
-    margin-top: 20px;
-}
 
-.response-item {
-    background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
-    padding: 18px 20px;
-    border-radius: 12px;
-    margin-bottom: 15px;
-    border-left: 4px solid #667eea;
-}
 
-.response-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
-}
 
-.response-badge {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
 
-.response-date {
-    font-size: 12px;
-    color: #a0aec0;
-}
 
-.response-text {
-    font-size: 14px;
-    line-height: 1.6;
-    color: #2d3748;
-}
 
 /* Response Form */
-.response-form-toggle {
-    margin-top: 15px;
-}
 
-.btn-respond {
-    padding: 10px 20px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-}
 
-.btn-respond:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
 
-.response-form {
-    margin-top: 15px;
-    padding: 20px;
-    background: #f7fafc;
-    border-radius: 12px;
-    border: 2px solid #e2e8f0;
-    display: none;
-}
 
-.response-form.active {
-    display: block;
-}
 
-.response-textarea {
-    width: 100%;
-    padding: 12px 16px;
-    border: 2px solid #e2e8f0;
-    border-radius: 10px;
-    font-size: 14px;
-    font-family: inherit;
-    resize: vertical;
-    min-height: 100px;
-}
 
-.response-textarea:focus {
-    outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-}
 
-.response-form-actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 12px;
-}
 
-.btn-submit {
-    padding: 10px 24px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-}
 
-.btn-cancel {
-    padding: 10px 24px;
-    background: #e2e8f0;
-    color: #4a5568;
-    border: none;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-}
 
 .empty-state {
     text-align: center;
@@ -605,7 +466,6 @@ include 'includes/header.php';
     </div>
 <?php else: ?>
     <?php foreach ($reviews as $review): ?>
-        <?php $responses = $review['_responses'] ?? []; ?>
         <div class="review-card">
             <div class="review-header">
                 <div class="review-customer-info">
@@ -627,7 +487,7 @@ include 'includes/header.php';
                         for ($i = $review['rating']; $i < 5; $i++) echo '☆';
                         ?>
                     </div>
-                    <div class="review-date"><?php echo formatDateTime($review['created_at']); ?></div>
+                    <div class="review-date"><?php echo pgasFormatUtcToManila($review['created_at']); ?></div>
                 </div>
             </div>
 
@@ -639,57 +499,12 @@ include 'includes/header.php';
                 <?php endif; ?>
             </div>
 
-            <!-- Responses Section -->
-            <?php if (!empty($responses)): ?>
-                <div class="review-responses">
-                    <?php foreach ($responses as $response): ?>
-                        <div class="response-item">
-                            <div class="response-header">
-                                <span class="response-badge">
-                                    <span>Store</span>
-                                    <span>PGas Admin</span>
-                                </span>
-                                <span class="response-date"><?php echo formatDateTime($response['created_at']); ?></span>
-                            </div>
-                            <div class="response-text">
-                                <?php echo nl2br(htmlspecialchars($response['response_text'])); ?>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
-
-            <!-- Response Form -->
-            <div class="response-form-toggle">
-                <button class="btn-respond" onclick="toggleResponseForm(<?php echo $review['review_id']; ?>)">
-                    Respond to Review
-                </button>
-                
-                <form method="POST" action="" id="responseForm<?php echo $review['review_id']; ?>" class="response-form">
-                    <input type="hidden" name="csrf_token" value="<?php echo $csrfToken; ?>">
-                    <input type="hidden" name="review_id" value="<?php echo $review['review_id']; ?>">
-                    
-                    <textarea name="response_text" class="response-textarea" 
-                              placeholder="Write your response as PGas Admin..." required></textarea>
-                    
-                    <div class="response-form-actions">
-                        <button type="submit" name="add_response" class="btn-submit">Post Response</button>
-                        <button type="button" class="btn-cancel" onclick="toggleResponseForm(<?php echo $review['review_id']; ?>)">
-                            Cancel
-                        </button>
-                    </div>
-                </form>
-            </div>
+        </div>
         </div>
     <?php endforeach; ?>
 <?php endif; ?>
 
-<script>
-function toggleResponseForm(reviewId) {
-    const form = document.getElementById('responseForm' + reviewId);
-    form.classList.toggle('active');
-}
-</script>
+
 
 <style>
 .alert {
