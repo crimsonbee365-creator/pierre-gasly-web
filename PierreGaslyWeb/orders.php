@@ -13,6 +13,41 @@ $db = Database::getInstance();
 $success = '';
 $error = '';
 
+function pgasParseUtcToManila($datetime) {
+    if ($datetime === null || $datetime === '') {
+        return null;
+    }
+
+    try {
+        $manilaTimezone = new DateTimeZone('Asia/Manila');
+        $raw = trim((string)$datetime);
+
+        if (preg_match('/(Z|[+\-]\d{2}:?\d{2})$/', $raw)) {
+            $dateTime = new DateTimeImmutable($raw);
+        } else {
+            $dateTime = new DateTimeImmutable($raw, new DateTimeZone('UTC'));
+        }
+
+        return $dateTime->setTimezone($manilaTimezone);
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+function pgasUtcToManilaTimestamp($datetime) {
+    $dateTime = pgasParseUtcToManila($datetime);
+    return $dateTime ? $dateTime->getTimestamp() : 0;
+}
+
+function pgasFormatUtcToManila($datetime, $format = 'M d, Y g:i A') {
+    $dateTime = pgasParseUtcToManila($datetime);
+    if ($dateTime) {
+        return $dateTime->format($format);
+    }
+
+    return formatDateTime($datetime, $format);
+}
+
 function ensureRewardsRuntimeTables($db) {
     $db->query("CREATE TABLE IF NOT EXISTS `rewards_settings` (
         `setting_id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -326,7 +361,7 @@ $allOrders = $db->select('orders');
 
 // Sort newest first
 usort($allOrders, function($a, $b) {
-    return strtotime($b['ordered_at'] ?? '0') - strtotime($a['ordered_at'] ?? '0');
+    return pgasUtcToManilaTimestamp($b['ordered_at'] ?? null) <=> pgasUtcToManilaTimestamp($a['ordered_at'] ?? null);
 });
 
 // Apply method + status filters
@@ -820,7 +855,7 @@ include 'includes/header.php';
                         #<?php echo htmlspecialchars($order['order_number']); ?>
                     </div>
                     <div class="order-date" style="margin-top: 8px; font-size: 13px; color: #64748b;">
-                        <?php echo formatDateTime($order['ordered_at']); ?>
+                        <?php echo pgasFormatUtcToManila($order['ordered_at']); ?>
                     </div>
                 </div>
                 <div>
