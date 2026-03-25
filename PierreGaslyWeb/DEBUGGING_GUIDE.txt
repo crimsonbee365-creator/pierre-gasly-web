@@ -1,0 +1,170 @@
+PIERRE GASLY BACKEND - DEBUGGING GUIDE
+======================================
+
+ENABLING DEBUG MODE:
+===================
+Add ?debug_db=1 to any URL to enable debug logging.
+
+Example: http://yourdomain.com/products.php?debug_db=1
+
+This will log all database operations to your error log file.
+
+
+COMMON ISSUES AND SOLUTIONS:
+============================
+
+1. EMAIL ALREADY EXISTS ERROR
+   ---------------------------
+   Issue: Getting "Email already exists" when adding users
+   
+   Check:
+   - Enable debug mode (?debug_db=1)
+   - Look at error log to see what the query returns
+   - Verify the email check query is working: SELECT user_id FROM users WHERE email = ?
+   
+   Solution:
+   - The fetchOne method now handles SELECT specific_column queries
+   - Make sure the email doesn't actually exist in the database
+
+
+2. PRODUCT ARCHIVE NOT WORKING
+   -----------------------------
+   Issue: Products don't disappear after archiving
+   
+   Check:
+   - Enable debug mode to see UPDATE query execution
+   - Check if is_active is being set as boolean (not integer)
+   - Verify the product list is filtered by is_active
+   
+   Solution:
+   - Products.php now redirects after archive/restore
+   - Boolean fields are automatically converted in UPDATE queries
+   - The select() method properly handles boolean comparisons
+
+
+3. PRODUCT NOT BEING ADDED
+   ------------------------
+   Issue: New products don't appear in the list
+   
+   Check:
+   - Enable debug mode on products.php?debug_db=1
+   - Look for "Insert called" in error log
+   - Check if all required fields are being sent
+   - Verify no validation errors in the form
+   
+   Solution:
+   - INSERT query parsing has been completely rewritten
+   - All parameters are now correctly mapped to columns
+   - Check error log for Supabase errors
+
+
+4. SALES/STATISTICS SHOWING 0
+   ---------------------------
+   Issue: Statistics show 0 even when data exists
+   
+   Check:
+   - Verify data actually exists in the sales table
+   - Check if orders are marked as 'delivered'
+   - Enable debug mode to see aggregate queries
+   
+   Solution:
+   - fetchOne now handles complex aggregate queries
+   - Default values are set to prevent null errors
+
+
+CHECKING ERROR LOGS:
+====================
+
+On Railway/most hosting:
+- Check the deployment logs
+- Look for lines starting with "DB DEBUG:" or "Supabase Error:"
+
+Local development:
+- Check php_error.log or error_log file
+- Location varies by system (check php.ini)
+
+
+MANUAL DATABASE CHECKS:
+=======================
+
+1. Check if email exists:
+   - Go to Supabase dashboard
+   - Open users table
+   - Search for the email
+
+2. Check product is_active:
+   - Go to Supabase dashboard
+   - Open products table
+   - Check is_active column (should be boolean true/false)
+
+3. Check sales data:
+   - Open sales table
+   - Verify sale_date format (YYYY-MM-DD)
+   - Check if order_status in orders is 'delivered'
+
+
+TESTING CHECKLIST:
+==================
+
+After deploying:
+
+1. Add a sub-admin
+   - Should NOT get "Email already exists" for new email
+   - Should get error only if email truly exists
+   
+2. Add a product
+   - Fill all required fields
+   - Product should appear in active list immediately
+   
+3. Archive a product
+   - Click archive button
+   - Product should disappear from active list
+   - Should appear in archived list
+   
+4. Create test orders
+   - Place orders from mobile app
+   - Mark orders as delivered
+   - Sales statistics should update
+
+5. Test ratings
+   - Add reviews from mobile app
+   - Average rating should calculate correctly
+   - No null/undefined errors
+
+
+SUPABASE PERMISSIONS:
+====================
+
+Make sure your Supabase tables have proper RLS (Row Level Security) policies:
+
+For development/testing, you can temporarily disable RLS:
+1. Go to Supabase dashboard
+2. Select your table
+3. Go to "Policies" tab
+4. Click "Disable RLS" (only for testing!)
+
+For production, create proper policies that allow:
+- Service role full access (for backend operations)
+- Anon key read access where appropriate
+
+
+COMMON SUPABASE ERRORS:
+=======================
+
+Error: "new row violates row-level security policy"
+Solution: Check RLS policies or temporarily disable for testing
+
+Error: "duplicate key value violates unique constraint"
+Solution: The data you're trying to insert already exists
+
+Error: "null value in column violates not-null constraint"
+Solution: A required field is missing or null
+
+
+CONTACT INFORMATION:
+===================
+If issues persist after following this guide:
+1. Check error logs with debug mode enabled
+2. Verify data in Supabase dashboard
+3. Test with ?debug_db=1 parameter
+4. Share error log output for further assistance
