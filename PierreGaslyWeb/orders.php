@@ -13,6 +13,41 @@ $db = Database::getInstance();
 $success = '';
 $error = '';
 
+function pgasParseUtcToManila($datetime) {
+    if ($datetime === null || $datetime === '') {
+        return null;
+    }
+
+    try {
+        $manilaTimezone = new DateTimeZone('Asia/Manila');
+        $raw = trim((string)$datetime);
+
+        if (preg_match('/(Z|[+\-]\d{2}:?\d{2})$/', $raw)) {
+            $dateTime = new DateTimeImmutable($raw);
+        } else {
+            $dateTime = new DateTimeImmutable($raw, new DateTimeZone('UTC'));
+        }
+
+        return $dateTime->setTimezone($manilaTimezone);
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+function pgasUtcToManilaTimestamp($datetime) {
+    $dateTime = pgasParseUtcToManila($datetime);
+    return $dateTime ? $dateTime->getTimestamp() : 0;
+}
+
+function pgasFormatUtcToManila($datetime, $format = 'M d, Y g:i A') {
+    $dateTime = pgasParseUtcToManila($datetime);
+    if ($dateTime) {
+        return $dateTime->format($format);
+    }
+
+    return formatDateTime($datetime, $format);
+}
+
 function ensureRewardsRuntimeTables($db) {
     $db->query("CREATE TABLE IF NOT EXISTS `rewards_settings` (
         `setting_id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -257,10 +292,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_rider'])) {
     } else {
         $order_id = (int)$_POST['order_id'];
         $rider_id = (int)$_POST['rider_id'];
-        
-        $sql = "UPDATE orders SET rider_id = ?, order_status = 'preparing', prepared_at = (NOW() AT TIME ZONE 'Asia/Manila'), updated_by = ? WHERE order_id = ?";
-        
-        if ($db->query($sql, [$rider_id, $_SESSION['user_id'], $order_id])) {
+        $nowManila = (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d H:i:s');
+
+        $payload = [
+            'rider_id' => $rider_id,
+            'order_status' => 'preparing',
+            'prepared_at' => $nowManila,
+            'updated_at' => $nowManila,
+            'updated_by' => $_SESSION['user_id'],
+        ];
+
+        $updatedRows = $db->update('orders', $payload, ['order_id' => $order_id]);
+
+        if (is_array($updatedRows) && !empty($updatedRows)) {
             $success = 'Rider assigned successfully!';
             logActivity('update', 'order', $order_id, "Assigned rider to order");
         } else {
@@ -275,37 +319,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
         $error = 'Invalid security token';
     } else {
         $order_id = (int)$_POST['order_id'];
-        $new_status = $_POST['new_status'];
-        
-        $timestamp_field = '';
+        $new_status = trim((string)($_POST['new_status'] ?? ''));
+        $nowManila = (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d H:i:s');
+
+        $updatePayload = [
+            'order_status' => $new_status,
+            'updated_at' => $nowManila,
+            'updated_by' => $_SESSION['user_id'],
+        ];
+
         switch ($new_status) {
             case 'preparing':
-                $timestamp_field = "prepared_at = (NOW() AT TIME ZONE 'Asia/Manila')";
+                $updatePayload['prepared_at'] = $nowManila;
                 break;
             case 'out_for_delivery':
-                $timestamp_field = "out_for_delivery_at = (NOW() AT TIME ZONE 'Asia/Manila')";
+                $updatePayload['out_for_delivery_at'] = $nowManila;
                 break;
             case 'delivered':
-                $timestamp_field = "delivered_at = (NOW() AT TIME ZONE 'Asia/Manila')";
-                $order = $db->fetchOne("SELECT * FROM orders WHERE order_id = ?", [$order_id]);
-                if ($order) {
-                    $existingSale = $db->fetchOne("SELECT sale_id FROM sales WHERE order_id = ? LIMIT 1", [$order_id]);
-                    if (!$existingSale) {
-                        $sale_sql = "INSERT INTO sales (order_id, rider_id, sale_amount, sale_date) VALUES (?, ?, ?, ?)";
-                        $db->query($sale_sql, [$order_id, $order['rider_id'], $order['total_amount'], date('Y-m-d')]);
-                    }
-                }
+                $updatePayload['delivered_at'] = $nowManila;
                 break;
             case 'cancelled':
-                $timestamp_field = "cancelled_at = (NOW() AT TIME ZONE 'Asia/Manila')";
+                $updatePayload['cancelled_at'] = $nowManila;
                 break;
         }
-        
-        $sql = "UPDATE orders SET order_status = ?, $timestamp_field, updated_by = ? WHERE order_id = ?";
-        
-        if ($db->query($sql, [$new_status, $_SESSION['user_id'], $order_id])) {
+
+        $updatedRows = $db->update('orders', $updatePayload, ['order_id' => $order_id]);
+
+        if (is_array($updatedRows) && !empty($updatedRows)) {
             if ($new_status === 'delivered') {
-                $updatedOrder = $db->fetchOne("SELECT * FROM orders WHERE order_id = ?", [$order_id]);
+                $updatedOrder = $updatedRows[0] ?? $db->fetchOne("SELECT * FROM orders WHERE order_id = ?", [$order_id]);
+                $existingSale = $db->fetchOne("SELECT sale_id FROM sales WHERE order_id = ? LIMIT 1", [$order_id]);
+                if ($updatedOrder && !$existingSale) {
+                    $sale_sql = "INSERT INTO sales (order_id, rider_id, sale_amount, sale_date) VALUES (?, ?, ?, ?)";
+                    $db->query($sale_sql, [$order_id, $updatedOrder['rider_id'] ?? null, $updatedOrder['total_amount'] ?? 0, date('Y-m-d')]);
+                }
+
                 $rewardProduct = $db->fetchOne("SELECT * FROM products WHERE product_id = ?", [$updatedOrder['product_id'] ?? 0]);
                 if ($updatedOrder && $rewardProduct) {
                     awardDeliveredOrderRewards($db, $updatedOrder, $rewardProduct);
@@ -340,7 +388,7 @@ $allOrders = $db->select('orders');
 
 // Sort newest first
 usort($allOrders, function($a, $b) {
-    return strtotime($b['ordered_at'] ?? '0') - strtotime($a['ordered_at'] ?? '0');
+    return pgasUtcToManilaTimestamp($b['ordered_at'] ?? null) <=> pgasUtcToManilaTimestamp($a['ordered_at'] ?? null);
 });
 
 // Apply method + status filters
@@ -834,7 +882,7 @@ include 'includes/header.php';
                         #<?php echo htmlspecialchars($order['order_number']); ?>
                     </div>
                     <div class="order-date" style="margin-top: 8px; font-size: 13px; color: #64748b;">
-                        <?php echo formatDateTime($order['ordered_at']); ?>
+                        <?php echo pgasFormatUtcToManila($order['ordered_at']); ?>
                     </div>
                 </div>
                 <div>
