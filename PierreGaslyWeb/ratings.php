@@ -48,7 +48,7 @@ function pgasFormatUtcToManila($datetime, $format = 'M d, Y g:i A') {
     return formatDateTime($datetime, $format);
 }
 
-// Admin response UI intentionally removed.
+// Admin reply feature intentionally removed.
 
 // Get filter
 $rating_filter = $_GET['rating'] ?? 'all';
@@ -92,6 +92,32 @@ foreach ($allBrands as $brand) {
     }
 }
 
+
+// Build stats correctly per rating
+$stats = [
+    'all' => count($allReviews),
+    '5' => 0,
+    '4' => 0,
+    '3' => 0,
+    '2' => 0,
+    '1' => 0,
+];
+
+$totalRatingValue = 0;
+$totalRatingCount = 0;
+foreach ($allReviews as $reviewRow) {
+    $ratingValue = (int)($reviewRow['rating'] ?? 0);
+    if ($ratingValue >= 1 && $ratingValue <= 5) {
+        $stats[(string)$ratingValue]++;
+        $totalRatingValue += $ratingValue;
+        $totalRatingCount++;
+    }
+}
+
+$avg_rating = $totalRatingCount > 0 ? ($totalRatingValue / $totalRatingCount) : 0;
+
+// Build display rows with joined details
+$reviews = [];
 foreach ($allReviews as $review) {
     $ratingValue = (int)($review['rating'] ?? 0);
     if ($rating_filter !== 'all' && $ratingValue !== (int)$rating_filter) {
@@ -340,23 +366,6 @@ include 'includes/header.php';
     margin-bottom: 20px;
 }
 
-/* Response Section */
-
-
-
-
-
-
-/* Response Form */
-
-
-
-
-
-
-
-
-
 
 .empty-state {
     text-align: center;
@@ -375,7 +384,7 @@ include 'includes/header.php';
 
 <div class="page-header">
     <div class="header-kicker">Feedback</div><h1>Customer Ratings & Reviews</h1>
-    <p>Monitor customer satisfaction and respond to feedback</p>
+    <p>Monitor customer satisfaction and customer feedback</p>
 </div>
 
 <?php if ($success): ?>
@@ -498,12 +507,9 @@ include 'includes/header.php';
                     </div>
                 <?php endif; ?>
             </div>
-
-        </div>
         </div>
     <?php endforeach; ?>
 <?php endif; ?>
-
 
 
 <style>
